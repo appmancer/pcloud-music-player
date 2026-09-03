@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple abstract music-note mark, kept within the ~18-90 adaptive-icon
+         safe zone so it survives circle/squircle/rounded-square launcher masks. -->
+    <path
+        android:fillColor="#F2F2F2"
+        android:pathData="M64,20 L64,62 A14,14 0 1,1 58,51 L58,32 L44,35 L44,74 A14,14 0 1,1 38,63 L38,26 Z" />
+</vector>
