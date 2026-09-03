@@ -61,9 +61,18 @@ interface MusicDao {
     @Query("UPDATE artists SET coverPath = :coverPath WHERE id = :artistId AND coverPath IS NULL")
     suspend fun setArtistCoverIfMissing(artistId: Long, coverPath: String)
 
+    /** Prefers an album's cover, but falls back to a loose track's own cover
+     * - an artist with no albums at all (every track sits directly in the
+     * artist folder, no album subfolder - e.g. a single-release act with no
+     * "Artist/Album/track.mp3" nesting) has no album row to pull from at
+     * all, so without this fallback it could never get a cover no matter
+     * how good its tracks' embedded art was. Found live against "Bitter
+     * Lake": every track has embedded art, but with no album folder at all,
+     * the artist tile stayed blank until this fallback was added. */
     @Query(
-        "UPDATE artists SET coverPath = (" +
-            "SELECT a.coverPath FROM albums a WHERE a.artistId = artists.id AND a.coverPath IS NOT NULL LIMIT 1" +
+        "UPDATE artists SET coverPath = COALESCE(" +
+            "(SELECT a.coverPath FROM albums a WHERE a.artistId = artists.id AND a.coverPath IS NOT NULL LIMIT 1), " +
+            "(SELECT t.coverPath FROM tracks t WHERE t.artistId = artists.id AND t.albumId IS NULL AND t.coverPath IS NOT NULL LIMIT 1)" +
             ") WHERE coverPath IS NULL"
     )
     suspend fun backfillMissingArtistCovers()
