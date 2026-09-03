@@ -103,15 +103,21 @@ class RemoteLibraryScanner(private val dao: MusicDao, private val apiClient: PCl
         val seenAlbumIds = mutableSetOf<Long>()
         val failedAlbums = mutableListOf<PCloudItem>()
         for (albumItem in albumDirs) {
-            val albumId = scanAlbumOrNull(artistId, artistName, artistPath, albumItem, coverCacheDir)
-            if (albumId != null) seenAlbumIds.add(albumId) else failedAlbums.add(albumItem)
+            when (val outcome = scanAlbumOutcome(artistId, artistName, artistPath, albumItem, coverCacheDir)) {
+                is AlbumScanOutcome.Scanned -> seenAlbumIds.add(outcome.albumId)
+                AlbumScanOutcome.NotAnAlbum -> {} // correctly excluded, not a failure - never retried
+                AlbumScanOutcome.Failed -> failedAlbums.add(albumItem)
+            }
         }
 
         val stillFailedAlbums = mutableListOf<PCloudItem>()
         for (albumItem in failedAlbums) {
             Log.d(TAG, "retrying album scan for ${albumItem.name}")
-            val albumId = scanAlbumOrNull(artistId, artistName, artistPath, albumItem, coverCacheDir)
-            if (albumId != null) seenAlbumIds.add(albumId) else stillFailedAlbums.add(albumItem)
+            when (val outcome = scanAlbumOutcome(artistId, artistName, artistPath, albumItem, coverCacheDir)) {
+                is AlbumScanOutcome.Scanned -> seenAlbumIds.add(outcome.albumId)
+                AlbumScanOutcome.NotAnAlbum -> {}
+                AlbumScanOutcome.Failed -> stillFailedAlbums.add(albumItem)
+            }
         }
 
         // Same preserve-not-prune protection as scanRoot, one level down -
@@ -130,19 +136,27 @@ class RemoteLibraryScanner(private val dao: MusicDao, private val apiClient: PCl
         return ArtistScanResult(artistId, stillFailedAlbums.size)
     }
 
-    /** Null both when [albumItem] genuinely isn't an album folder (no audio,
-     * no Disc N subfolders - logged and never retried, same as before) and
-     * when listing it threw - the caller can't tell those apart from the
-     * return value alone, but the retry pass is cheap enough on the
-     * legitimate-skip path (one wasted listChildren call) that it isn't
-     * worth the extra plumbing to distinguish them. */
-    private suspend fun scanAlbumOrNull(
+    private sealed class AlbumScanOutcome {
+        data class Scanned(val albumId: Long) : AlbumScanOutcome()
+        data object NotAnAlbum : AlbumScanOutcome()
+        data object Failed : AlbumScanOutcome()
+    }
+
+    /** Distinguishes a folder that's genuinely not an album (no audio, no
+     * Disc N subfolders - correctly excluded, never retried, never counted
+     * as a failure) from one whose listing actually threw (retried once,
+     * and only still-failing ones are preserved from deletion / counted in
+     * scanRoot's returned failure count). Collapsing these two into a
+     * single null used to make every scan's "failed" count noisy with
+     * ordinary non-album folders (e.g. bonus-content folders) alongside
+     * genuine network failures. */
+    private suspend fun scanAlbumOutcome(
         artistId: Long,
         artistName: String,
         artistPath: String,
         albumItem: PCloudItem,
         coverCacheDir: File,
-    ): Long? {
+    ): AlbumScanOutcome {
         val albumPath = "$artistPath/${albumItem.name}"
         return try {
             val albumChildren = apiClient.listChildren(albumPath)
@@ -151,12 +165,14 @@ class RemoteLibraryScanner(private val dao: MusicDao, private val apiClient: PCl
             val directAudioFiles = albumChildren.filter { !it.isFolder && isAudioFile(it.name) }.sortedBy { it.name }
             if (discDirs.isEmpty() && directAudioFiles.isEmpty()) {
                 Log.d(TAG, "skipping non-album folder (no audio, no Disc N subfolders): $albumPath")
-                return null
+                return AlbumScanOutcome.NotAnAlbum
             }
-            scanAlbum(artistId, artistName, albumPath, albumItem.name, discDirs.map { it.name }, directAudioFiles, coverCacheDir)
+            AlbumScanOutcome.Scanned(
+                scanAlbum(artistId, artistName, albumPath, albumItem.name, discDirs.map { it.name }, directAudioFiles, coverCacheDir)
+            )
         } catch (e: Exception) {
             Log.e(TAG, "scanAlbum failed for $albumPath", e)
-            null
+            AlbumScanOutcome.Failed
         }
     }
 

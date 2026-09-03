@@ -11,23 +11,21 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.sjpickard.pcloudmusic.cloud.PCloudApiClient
+import androidx.work.WorkInfo
+import com.sjpickard.pcloudmusic.cloud.LibrarySyncManager
+import com.sjpickard.pcloudmusic.cloud.LibrarySyncWorker
 import com.sjpickard.pcloudmusic.cloud.PCloudAuthManager
-import com.sjpickard.pcloudmusic.cloud.RemoteLibraryScanner
-import com.sjpickard.pcloudmusic.data.MusicDao
-import java.io.File
-import kotlinx.coroutines.launch
 
 /** pCloud account screen - sign-in (browser token-flow, see
  * PCloudAuthManager), plus a manual "Sync library" trigger for the same
- * whole-root scan MainActivity runs on every launch once signed in.
+ * whole-root scan MainActivity runs on every launch once signed in. The
+ * scan itself runs as a WorkManager job (LibrarySyncManager/LibrarySyncWorker)
+ * rather than directly off this screen's own coroutine scope, so it isn't
+ * cancelled by leaving this screen, locking the device, or the Activity
+ * being torn down mid-scan - this composable only observes its WorkInfo.
  *
  * The credentials wired into this build were originally registered for the
  * Big Finish player, reused here for convenience until a dedicated app is
@@ -37,28 +35,28 @@ import kotlinx.coroutines.launch
  * folder rather than the whole drive, and a separate registration (or
  * widened folder access) is needed for MUSIC_ROOT specifically. */
 @Composable
-fun AccountScreen(authManager: PCloudAuthManager, apiClient: PCloudApiClient, dao: MusicDao) {
+fun AccountScreen(authManager: PCloudAuthManager, librarySyncManager: LibrarySyncManager) {
     val context = LocalContext.current
-    val cacheDir = context.cacheDir
-    val scope = rememberCoroutineScope()
     val authState by authManager.authState.collectAsState()
-    var scanStatus by remember { mutableStateOf("") }
+    val workInfo by librarySyncManager.observeState().collectAsState(initial = null)
 
-    suspend fun sync() {
-        scanStatus = "Syncing library from pCloud…"
-        try {
-            val coverCacheDir = File(cacheDir, "covers")
-            val stillFailedCount = RemoteLibraryScanner(dao, apiClient).scanRoot(MUSIC_ROOT, coverCacheDir)
-            scanStatus = if (stillFailedCount > 0) {
+    val scanStatus = when (workInfo?.state) {
+        WorkInfo.State.ENQUEUED, WorkInfo.State.RUNNING -> "Syncing library from pCloud…"
+        WorkInfo.State.SUCCEEDED -> {
+            val stillFailedCount = workInfo?.outputData?.getInt(LibrarySyncWorker.KEY_STILL_FAILED_COUNT, 0) ?: 0
+            if (stillFailedCount > 0) {
                 "Sync complete, but $stillFailedCount folder${if (stillFailedCount == 1) "" else "s"} couldn't be reached " +
                     "even after a retry (network issue?) - their existing data was left as-is. Tap Sync library again to retry."
             } else {
                 "Sync complete."
             }
-        } catch (e: Exception) {
-            scanStatus = "Sync failed: ${e.javaClass.simpleName}: ${e.message} " +
+        }
+        WorkInfo.State.FAILED -> {
+            val error = workInfo?.outputData?.getString(LibrarySyncWorker.KEY_ERROR)
+            "Sync failed: $error " +
                 "(if sign-in succeeded but this keeps failing, this app's pCloud registration may only reach the Big Finish folder - see local.properties)"
         }
+        else -> ""
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -82,7 +80,7 @@ fun AccountScreen(authManager: PCloudAuthManager, apiClient: PCloudApiClient, da
         Spacer(modifier = Modifier.height(32.dp))
         Text(text = scanStatus, style = MaterialTheme.typography.bodyMedium)
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { scope.launch { sync() } }, enabled = authState.isSignedIn) {
+        Button(onClick = { librarySyncManager.sync() }, enabled = authState.isSignedIn) {
             Text("Sync library")
         }
     }

@@ -110,15 +110,21 @@ class LocalLibraryScanner(private val dao: MusicDao) {
         val seenAlbumIds = mutableSetOf<Long>()
         val failedAlbumDirs = mutableListOf<File>()
         for (childDir in children) {
-            val albumId = scanAlbumOrNull(artistId, artistName, childDir, coverCacheDir)
-            if (albumId != null) seenAlbumIds.add(albumId) else failedAlbumDirs.add(childDir)
+            when (val outcome = scanAlbumOutcome(artistId, artistName, childDir, coverCacheDir)) {
+                is AlbumScanOutcome.Scanned -> seenAlbumIds.add(outcome.albumId)
+                AlbumScanOutcome.NotAnAlbum -> {} // correctly excluded, not a failure - never retried
+                AlbumScanOutcome.Failed -> failedAlbumDirs.add(childDir)
+            }
         }
 
         val stillFailedAlbumDirs = mutableListOf<File>()
         for (childDir in failedAlbumDirs) {
             Log.d(TAG, "retrying album scan for ${childDir.path}")
-            val albumId = scanAlbumOrNull(artistId, artistName, childDir, coverCacheDir)
-            if (albumId != null) seenAlbumIds.add(albumId) else stillFailedAlbumDirs.add(childDir)
+            when (val outcome = scanAlbumOutcome(artistId, artistName, childDir, coverCacheDir)) {
+                is AlbumScanOutcome.Scanned -> seenAlbumIds.add(outcome.albumId)
+                AlbumScanOutcome.NotAnAlbum -> {}
+                AlbumScanOutcome.Failed -> stillFailedAlbumDirs.add(childDir)
+            }
         }
 
         // Same preserve-not-prune protection as scan(), one level down.
@@ -135,24 +141,33 @@ class LocalLibraryScanner(private val dao: MusicDao) {
         return ArtistScanResult(artistId, stillFailedAlbumDirs.size)
     }
 
-    /** Null both when [childDir] genuinely isn't an album folder (no audio,
-     * no Disc N subfolders - logged and never retried) and when scanning it
-     * threw - see RemoteLibraryScanner.scanAlbumOrNull's doc comment for why
-     * that's an acceptable trade-off. */
-    private suspend fun scanAlbumOrNull(artistId: Long, artistName: String, childDir: File, coverCacheDir: File): Long? {
+    private sealed class AlbumScanOutcome {
+        data class Scanned(val albumId: Long) : AlbumScanOutcome()
+        data object NotAnAlbum : AlbumScanOutcome()
+        data object Failed : AlbumScanOutcome()
+    }
+
+    /** Distinguishes a folder that's genuinely not an album (no audio, no
+     * Disc N subfolders - correctly excluded, never retried, never counted
+     * as a failure) from one whose scan actually threw (retried once, and
+     * only still-failing ones are preserved from deletion / counted in the
+     * returned failure count) - see RemoteLibraryScanner's identical
+     * AlbumScanOutcome for why collapsing these into one nullable used to
+     * make the failure count noisy with ordinary non-album folders. */
+    private suspend fun scanAlbumOutcome(artistId: Long, artistName: String, childDir: File, coverCacheDir: File): AlbumScanOutcome {
         val discDirs = childDir.listFiles { f -> f.isDirectory && DISC_FOLDER_PATTERN.matches(f.name) }
             ?.sortedBy { discNumberOf(it) } ?: emptyList()
         val directAudioFiles = childDir.listFiles { f -> f.isFile && isAudioFile(f) }?.sortedBy { it.name } ?: emptyList()
 
         if (discDirs.isEmpty() && directAudioFiles.isEmpty()) {
             Log.d(TAG, "skipping non-album folder (no audio, no Disc N subfolders): ${childDir.path}")
-            return null
+            return AlbumScanOutcome.NotAnAlbum
         }
         return try {
-            scanAlbum(artistId, artistName, childDir, discDirs, directAudioFiles, coverCacheDir)
+            AlbumScanOutcome.Scanned(scanAlbum(artistId, artistName, childDir, discDirs, directAudioFiles, coverCacheDir))
         } catch (e: Exception) {
             Log.e(TAG, "scanAlbum failed for ${childDir.path}", e)
-            null
+            AlbumScanOutcome.Failed
         }
     }
 

@@ -42,11 +42,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.sjpickard.pcloudmusic.PcloudMusicApplication
 import com.sjpickard.pcloudmusic.cloud.DownloadManager
-import com.sjpickard.pcloudmusic.cloud.PCloudApiClient
+import com.sjpickard.pcloudmusic.cloud.LibrarySyncManager
 import com.sjpickard.pcloudmusic.cloud.PCloudAuthManager
-import com.sjpickard.pcloudmusic.cloud.RemoteLibraryScanner
 import com.sjpickard.pcloudmusic.data.LocalLibraryScanner
-import com.sjpickard.pcloudmusic.data.MusicDao
 import com.sjpickard.pcloudmusic.playback.PlayerController
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -54,12 +52,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val TAG = "MainActivity"
-
-/** The pCloud path this app scans once signed in - mirrors bigfinish-player's
- * BIG_FINISH_ROOT constant. Folder/album structure under this root is
- * entirely what drives the catalog (see RemoteLibraryScanner) - a new
- * artist/album just needs to land in the right place in pCloud to show up. */
-const val MUSIC_ROOT = "/My Music/Music"
 
 /** Dev/prototype fallback used before pCloud sign-in - a folder on the
  * device's own external storage, populated by `adb push` from the FUSE-
@@ -118,23 +110,27 @@ class MainActivity : ComponentActivity() {
                             dao.backfillMissingAlbumCovers()
                             dao.backfillMissingArtistCovers()
                         }
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val coverCacheDir = File(cacheDir, "covers")
-                                val stillFailedCount = if (app.pCloudAuthManager.authState.value.isSignedIn) {
-                                    RemoteLibraryScanner(dao, app.pCloudApiClient).scanRoot(MUSIC_ROOT, coverCacheDir)
-                                } else if (LOCAL_MUSIC_ROOT.isDirectory) {
-                                    LocalLibraryScanner(dao).scan(LOCAL_MUSIC_ROOT, coverCacheDir)
-                                } else {
-                                    0
+                        // Signed-in case goes through LibrarySyncManager (a
+                        // WorkManager job - see its doc comment) so a scan
+                        // started here keeps running even if this Activity
+                        // doesn't survive that long. The local-file dev
+                        // fallback has no such risk (no network round trips,
+                        // seconds not minutes) so it stays inline.
+                        if (app.pCloudAuthManager.authState.value.isSignedIn) {
+                            app.librarySyncManager.sync()
+                        } else if (LOCAL_MUSIC_ROOT.isDirectory) {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    val coverCacheDir = File(cacheDir, "covers")
+                                    val stillFailedCount = LocalLibraryScanner(dao).scan(LOCAL_MUSIC_ROOT, coverCacheDir)
+                                    if (stillFailedCount > 0) {
+                                        Log.w(TAG, "startup library scan complete with $stillFailedCount folder(s) unreachable - existing data for those was left untouched")
+                                    } else {
+                                        Log.d(TAG, "startup library scan complete")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "startup library scan failed", e)
                                 }
-                                if (stillFailedCount > 0) {
-                                    Log.w(TAG, "startup library scan complete with $stillFailedCount folder(s) unreachable - existing data for those was left untouched")
-                                } else {
-                                    Log.d(TAG, "startup library scan complete")
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "startup library scan failed", e)
                             }
                         }
                     }
@@ -160,9 +156,8 @@ class MainActivity : ComponentActivity() {
                                 viewModel,
                                 app.playerController,
                                 app.pCloudAuthManager,
-                                app.pCloudApiClient,
                                 app.downloadManager,
-                                dao,
+                                app.librarySyncManager,
                             )
                         }
                     }
@@ -178,9 +173,8 @@ fun PcloudMusicNavGraph(
     viewModel: LibraryViewModel,
     playerController: PlayerController,
     pCloudAuthManager: PCloudAuthManager,
-    pCloudApiClient: PCloudApiClient,
     downloadManager: DownloadManager,
-    dao: MusicDao,
+    librarySyncManager: LibrarySyncManager,
 ) {
     NavHost(navController = navController, startDestination = "artists", modifier = Modifier) {
         composable("artists") {
@@ -230,7 +224,7 @@ fun PcloudMusicNavGraph(
             )
         }
         composable("account") {
-            AccountScreen(authManager = pCloudAuthManager, apiClient = pCloudApiClient, dao = dao)
+            AccountScreen(authManager = pCloudAuthManager, librarySyncManager = librarySyncManager)
         }
     }
 }
