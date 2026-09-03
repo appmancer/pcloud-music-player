@@ -9,7 +9,9 @@ import com.sjpickard.pcloudmusic.data.findOrMergeTrack
 import java.io.File
 
 private const val TAG = "RemoteLibraryScanner"
-private const val ID3_PREFIX_BYTES = 200_000L // comfortably covers a tag + embedded cover art
+private const val TAG_PROBE_BYTES = 4_096L // enough to read any format's magic bytes/header, and often a whole ID3 tag with no large embedded cover
+private const val FLAC_OR_MP4_PREFIX_BYTES = 200_000L // FLAC/MP4 have no upfront total-tag-size field (see Id3Reader.peekId3RequiredBytes) - fixed budget for those, same as before
+private const val MAX_ID3_FETCH_BYTES = 5_000_000L // sane cap on a single track's tag+cover, in case of a pathologically large embedded image
 
 private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "flac", "wav", "ogg", "aac")
 private val DISC_FOLDER_PATTERN = Regex("""^Disc\s*(\d+)$""", RegexOption.IGNORE_CASE)
@@ -258,15 +260,33 @@ class RemoteLibraryScanner(private val dao: MusicDao, private val apiClient: PCl
         }
     }
 
-    /** Fetches just enough of the file's front to read its ID3 tag, rather
-     * than downloading the whole thing during a scan - a per-file round trip
+    /** Fetches just enough of the file's front to read its tag, rather than
+     * downloading the whole thing during a scan - a per-file round trip
      * (getDownloadUrl then a ranged GET), same shape as OneDriveApiClient/
-     * bigfinish's RemoteLibraryScanner. */
+     * bigfinish's RemoteLibraryScanner. A small initial probe is enough for
+     * most tracks (plain text tags, or a small/no embedded cover); for ID3
+     * specifically, its 10-byte header declares the tag's exact total size
+     * up front, so a second, precisely-sized fetch only happens when the
+     * probe wasn't enough - rather than either a fixed budget silently
+     * truncating a large embedded cover (found live: a ~300KB cover in a
+     * ~308KB tag, well past the previous fixed 200KB budget) or wastefully
+     * over-fetching every track "just in case". FLAC/MP4 have no equivalent
+     * upfront size field, so they still use a fixed, more generous budget. */
     private suspend fun readTags(item: PCloudItem): Id3Reader.Id3Tags? {
         val fileId = item.fileId ?: return null
         return try {
             val downloadUrl = apiClient.getDownloadUrl(fileId) ?: return null
-            val prefix = apiClient.fetchPrefix(downloadUrl, maxBytes = ID3_PREFIX_BYTES)
+            val probe = apiClient.fetchPrefix(downloadUrl, maxBytes = TAG_PROBE_BYTES)
+            if (probe.isEmpty()) return null
+
+            val id3RequiredBytes = Id3Reader.peekId3RequiredBytes(probe)
+            val prefix = when {
+                id3RequiredBytes != null && id3RequiredBytes > probe.size ->
+                    apiClient.fetchPrefix(downloadUrl, maxBytes = id3RequiredBytes.coerceAtMost(MAX_ID3_FETCH_BYTES))
+                id3RequiredBytes == null && probe.size.toLong() < FLAC_OR_MP4_PREFIX_BYTES ->
+                    apiClient.fetchPrefix(downloadUrl, maxBytes = FLAC_OR_MP4_PREFIX_BYTES)
+                else -> probe
+            }
             if (prefix.isEmpty()) return null
             Id3Reader.readFromPrefix(prefix, totalFileSize = item.size, includeCoverArt = true)
         } catch (e: Exception) {

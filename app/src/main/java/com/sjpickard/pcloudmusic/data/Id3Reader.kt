@@ -91,6 +91,7 @@ object Id3Reader {
                 isId3(header) -> {
                     val tagSize = validateId3HeaderAndGetTagSize(header) ?: return null
                     val audioBytes = (raf.length() - 10 - tagSize).coerceAtLeast(0)
+                    raf.seek(10) // the 12-byte peek above overshot the 10-byte ID3 header - realign before frame parsing
                     readId3Frames(RandomAccessFileSource(raf), header, tagSize, audioBytes, includeCoverArt)
                 }
                 isFlac(header) -> {
@@ -120,6 +121,24 @@ object Id3Reader {
             isMp4(header) -> readMp4(ByteArraySource(prefix), includeCoverArt)
             else -> null
         }
+    }
+
+    /** ID3v2's 10-byte header declares the tag's exact total size up front
+     * (unlike FLAC/MP4, which have no single equivalent field - their tag
+     * data is scattered across separately-sized blocks/boxes instead), so
+     * for an MP3 [prefix] this can say precisely how many bytes of the file
+     * are needed to read the tag *in full*, including any embedded cover
+     * art, before attempting to parse it. RemoteLibraryScanner uses this to
+     * fetch exactly enough rather than either a fixed budget that silently
+     * truncates a large embedded cover (a real embedded cover this was
+     * built for came in at ~300KB, well past a 200KB fixed budget) or
+     * wastefully over-fetching every track "just in case". Returns null for
+     * a non-ID3 file, or one whose magic bytes [prefix] is too short to
+     * even check. */
+    fun peekId3RequiredBytes(prefix: ByteArray): Long? {
+        if (prefix.size < 10 || !isId3(prefix)) return null
+        val tagSize = synchsafeToInt(prefix, 6)
+        return if (tagSize > 0) 10L + tagSize else null
     }
 
     private fun isId3(header: ByteArray): Boolean =
@@ -167,7 +186,7 @@ object Id3Reader {
         while (consumed + 10 <= tagSize) {
             if (!source.readFully(frameHeader)) break
             val frameId = String(frameHeader, 0, 4, Charsets.US_ASCII)
-            if (frameId.isBlank() || frameId[0] == ' ') break // padding reached
+            if (frameId.isBlank() || frameId[0] == '\u0000') break // padding reached (ID3v2 pads with NUL bytes, not spaces)
 
             val frameSize = if (majorVersion >= 4) {
                 synchsafeToInt(frameHeader, 4)
@@ -229,7 +248,7 @@ object Id3Reader {
         while (consumed + 6 <= tagSize) {
             if (!source.readFully(frameHeader)) break
             val frameId = String(frameHeader, 0, 3, Charsets.US_ASCII)
-            if (frameId.isBlank() || frameId[0] == ' ') break // padding reached
+            if (frameId.isBlank() || frameId[0] == '\u0000') break // padding reached (ID3v2 pads with NUL bytes, not spaces)
 
             val frameSize = bigEndianToInt24(frameHeader, 3)
             consumed += 6
@@ -413,7 +432,7 @@ object Id3Reader {
             3 -> Charsets.UTF_8
             else -> Charsets.ISO_8859_1
         }
-        return String(bytes, 1, bytes.size - 1, charset).trimEnd(' ', ' ')
+        return String(bytes, 1, bytes.size - 1, charset).trimEnd('\u0000', ' ')
     }
 
     private fun extractPictureBytes(frame: ByteArray): ByteArray? {
