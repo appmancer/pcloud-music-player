@@ -128,6 +128,22 @@ class PlayerController(
         }
     }
 
+    /** Waits for [connect]'s async MediaController.Builder to finish, up to
+     * [timeoutMs] - needed by the home-screen widget's button actions
+     * (PlayerWidgetActions.kt), which can fire from a cold app process (the
+     * widget itself doesn't keep the process alive) before that connection
+     * has had a chance to complete, silently no-op'ing togglePlayPause/
+     * skipToNext/skipToPrevious otherwise since they all just early-return
+     * on a null controller. */
+    suspend fun awaitConnected(timeoutMs: Long = 5_000L): Boolean {
+        if (controller != null) return true
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (controller == null && System.currentTimeMillis() < deadline) {
+            delay(50)
+        }
+        return controller != null
+    }
+
     fun togglePlayPause() {
         val c = controller ?: return
         if (c.isPlaying) c.pause() else c.play()

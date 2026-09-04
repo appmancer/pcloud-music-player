@@ -75,20 +75,25 @@ class PlayerWidget : GlanceAppWidget() {
 @androidx.compose.runtime.Composable
 private fun WidgetContent(track: TrackEntity?, isPlaying: Boolean, coverBitmap: Bitmap?) {
     val context = androidx.glance.LocalContext.current
+    // The "open the app" action lives on the cover art and text only, never
+    // on the shared Row itself - Glance/RemoteViews doesn't reliably support
+    // a parent container's click action alongside independently-clickable
+    // children inside it (the parent's region can swallow the children's),
+    // which was silently eating the prev/play-pause/next buttons' taps.
+    val openApp = actionStartActivity(Intent(context, MainActivity::class.java))
     Row(
         modifier = GlanceModifier
             .fillMaxSize()
             .background(ColorProvider(Color(0xFFFFFBFE)))
-            .padding(8.dp)
-            .clickable(actionStartActivity(Intent(context, MainActivity::class.java))),
+            .padding(8.dp),
         verticalAlignment = Alignment.Vertical.CenterVertically,
     ) {
         Image(
             provider = if (coverBitmap != null) ImageProvider(coverBitmap) else ImageProvider(android.R.drawable.ic_media_play),
             contentDescription = null,
-            modifier = GlanceModifier.size(COVER_SIZE_DP.dp).cornerRadius(6.dp),
+            modifier = GlanceModifier.size(COVER_SIZE_DP.dp).cornerRadius(6.dp).clickable(openApp),
         )
-        Column(modifier = GlanceModifier.defaultWeight().padding(horizontal = 8.dp)) {
+        Column(modifier = GlanceModifier.defaultWeight().padding(horizontal = 8.dp).clickable(openApp)) {
             Text(
                 text = track?.title ?: "Nothing playing",
                 maxLines = 1,
