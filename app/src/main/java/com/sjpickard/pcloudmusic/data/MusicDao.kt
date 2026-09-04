@@ -130,8 +130,13 @@ interface MusicDao {
     @Query("SELECT * FROM tracks WHERE albumId = :albumId ORDER BY discNumber ASC, trackNumber ASC")
     suspend fun getTracksForAlbum(albumId: Long): List<TrackEntity>
 
-    /** Loose tracks directly under an artist folder, no album at all. */
-    @Query("SELECT * FROM tracks WHERE artistId = :artistId AND albumId IS NULL ORDER BY title COLLATE NOCASE ASC")
+    /** Loose tracks directly under an artist folder, no album at all. Order
+     * by trackNumber like observeTracksForAlbum/getTracksForAlbum do, not
+     * title - a loose "album" whose tracks carry clean, prefix-free titles
+     * (e.g. Kino/Radio Voltaire: "Radio Voltaire", "The Dead Club",
+     * "Idlewild", ...) sorted alphabetically by title bears no relation to
+     * the track order the tags themselves already got right. */
+    @Query("SELECT * FROM tracks WHERE artistId = :artistId AND albumId IS NULL ORDER BY trackNumber ASC, title COLLATE NOCASE ASC")
     fun observeLooseTracks(artistId: Long): Flow<List<TrackEntity>>
 
     @Query("SELECT * FROM tracks WHERE id = :trackId")
