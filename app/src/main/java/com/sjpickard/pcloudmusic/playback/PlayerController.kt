@@ -144,29 +144,51 @@ class PlayerController(
         return controller != null
     }
 
+    // Every method below hops onto `scope` (Dispatchers.Main.immediate)
+    // before touching `controller` - Media3's MediaController requires all
+    // calls on the thread that created it (here, Main, via connect()) and
+    // throws IllegalStateException otherwise. Existing callers (Compose
+    // click handlers) are already on Main, where Main.immediate runs
+    // synchronously with no behavioural change; this is what actually
+    // matters for a caller that isn't - found live: the home-screen widget's
+    // button actions run on a background coroutine dispatcher (Glance's
+    // ActionCallback), which crashed every tap with exactly that exception
+    // before this fix.
     fun togglePlayPause() {
-        val c = controller ?: return
-        if (c.isPlaying) c.pause() else c.play()
+        scope.launch {
+            val c = controller ?: return@launch
+            if (c.isPlaying) c.pause() else c.play()
+        }
     }
 
-    fun skipToNext() = controller?.seekToNext()
+    fun skipToNext() {
+        scope.launch { controller?.seekToNext() }
+    }
 
-    fun skipToPrevious() = controller?.seekToPrevious()
+    fun skipToPrevious() {
+        scope.launch { controller?.seekToPrevious() }
+    }
 
     fun seekBack30() = seekBy(-SEEK_INCREMENT_MS)
 
     fun seekForward30() = seekBy(SEEK_INCREMENT_MS)
 
     fun seekTo(positionMs: Long) {
+        scope.launch { seekToOnMain(positionMs) }
+    }
+
+    private fun seekBy(deltaMs: Long) {
+        scope.launch {
+            val c = controller ?: return@launch
+            seekToOnMain(c.currentPosition + deltaMs)
+        }
+    }
+
+    private fun seekToOnMain(positionMs: Long) {
         val c = controller ?: return
         val duration = c.duration.takeIf { it != C.TIME_UNSET } ?: Long.MAX_VALUE
         c.seekTo(positionMs.coerceIn(0, duration))
         _positionMs.value = c.currentPosition
-    }
-
-    private fun seekBy(deltaMs: Long) {
-        val c = controller ?: return
-        seekTo(c.currentPosition + deltaMs)
     }
 
     private val playerListener = object : Player.Listener {
