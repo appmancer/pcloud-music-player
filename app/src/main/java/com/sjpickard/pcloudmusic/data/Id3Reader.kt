@@ -141,6 +141,44 @@ object Id3Reader {
         return if (tagSize > 0) 10L + tagSize else null
     }
 
+    /** MP4 has no single field declaring its whole tag region's size up
+     * front the way ID3 does - `moov` (which nests `udta` -> `meta` ->
+     * `ilst`, the tags/cover actually wanted) does declare its own size in
+     * its own box header, though, and for a "moov early" file that's
+     * enough: walks [prefix]'s top-level box headers only (never their
+     * content, so this works even when a box's content is far larger than
+     * [prefix] itself) looking for `moov`, and if found, returns how many
+     * bytes from the start of the file are needed to fetch it *in full*.
+     * Found live against "Opera on 3": `moov` sits right after `ftyp` (good),
+     * but is itself ~2.9MB - multi-hour recordings carry huge sample-
+     * position tables in `moov` too, not just the tags - so even the fixed
+     * 200KB FLAC/MP4 budget came nowhere close to reaching `ilst`. Returns
+     * null if `moov` isn't found within [prefix] at all, which most likely
+     * means it comes after a large `mdat` - seeking past that costs nothing
+     * for a local (RandomAccessFile) read, but a fundamentally different
+     * fix (fetching at an arbitrary offset, not just a larger prefix from
+     * the start) would be needed to handle it for a remote scan - not
+     * attempted here. */
+    fun peekMp4RequiredBytes(prefix: ByteArray): Long? {
+        if (prefix.size < 8 || !isMp4(prefix.copyOfRange(0, minOf(12, prefix.size)))) return null
+        var pos = 0L
+        while (pos + 8 <= prefix.size) {
+            val p = pos.toInt()
+            var size = bigEndianToUInt(prefix, p)
+            val type = String(prefix, p + 4, 4, Charsets.US_ASCII)
+            var headerSize = 8L
+            if (size == 1L) {
+                if (pos + 16 > prefix.size) return null
+                size = bigEndianToLong(prefix, p + 8)
+                headerSize = 16L
+            }
+            if (size < headerSize) return null
+            if (type == "moov") return pos + size
+            pos += size
+        }
+        return null
+    }
+
     private fun isId3(header: ByteArray): Boolean =
         header.size >= 3 && header[0] == 'I'.code.toByte() && header[1] == 'D'.code.toByte() && header[2] == '3'.code.toByte()
 

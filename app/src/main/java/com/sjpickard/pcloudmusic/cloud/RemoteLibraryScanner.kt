@@ -10,8 +10,9 @@ import java.io.File
 
 private const val TAG = "RemoteLibraryScanner"
 private const val TAG_PROBE_BYTES = 4_096L // enough to read any format's magic bytes/header, and often a whole ID3 tag with no large embedded cover
-private const val FLAC_OR_MP4_PREFIX_BYTES = 200_000L // FLAC/MP4 have no upfront total-tag-size field (see Id3Reader.peekId3RequiredBytes) - fixed budget for those, same as before
+private const val FLAC_PREFIX_BYTES = 200_000L // FLAC has no upfront total-tag-size field (see Id3Reader.peekId3RequiredBytes) - fixed budget, same as before
 private const val MAX_ID3_FETCH_BYTES = 5_000_000L // sane cap on a single track's tag+cover, in case of a pathologically large embedded image
+private const val MAX_MP4_FETCH_BYTES = 20_000_000L // sane cap on fetching a whole `moov` box - a multi-hour recording's own sample tables (not just its tags) can be several MB
 
 private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "flac", "wav", "ogg", "aac")
 private val DISC_FOLDER_PATTERN = Regex("""^Disc\s*(\d+)$""", RegexOption.IGNORE_CASE)
@@ -264,14 +265,18 @@ class RemoteLibraryScanner(private val dao: MusicDao, private val apiClient: PCl
      * downloading the whole thing during a scan - a per-file round trip
      * (getDownloadUrl then a ranged GET), same shape as OneDriveApiClient/
      * bigfinish's RemoteLibraryScanner. A small initial probe is enough for
-     * most tracks (plain text tags, or a small/no embedded cover); for ID3
-     * specifically, its 10-byte header declares the tag's exact total size
-     * up front, so a second, precisely-sized fetch only happens when the
-     * probe wasn't enough - rather than either a fixed budget silently
-     * truncating a large embedded cover (found live: a ~300KB cover in a
-     * ~308KB tag, well past the previous fixed 200KB budget) or wastefully
-     * over-fetching every track "just in case". FLAC/MP4 have no equivalent
-     * upfront size field, so they still use a fixed, more generous budget. */
+     * most tracks (plain text tags, or a small/no embedded cover); a
+     * second, precisely-sized fetch only happens when the probe wasn't
+     * enough - rather than either a fixed budget silently truncating a
+     * large embedded cover, or wastefully over-fetching every track "just
+     * in case". ID3's 10-byte header declares the tag's exact total size up
+     * front (found live: a ~300KB cover in a ~308KB tag, well past the
+     * previous fixed 200KB budget); MP4 has no equivalent single field, but
+     * `moov`'s own box header declares enough to right-size a fetch for a
+     * "moov early" file (found live: a multi-hour opera recording whose
+     * `moov` - carrying its full sample tables, not just tags - came in at
+     * ~2.9MB). FLAC has no equivalent at all, so it still uses a fixed,
+     * more generous budget. */
     private suspend fun readTags(item: PCloudItem): Id3Reader.Id3Tags? {
         val fileId = item.fileId ?: return null
         return try {
@@ -280,11 +285,14 @@ class RemoteLibraryScanner(private val dao: MusicDao, private val apiClient: PCl
             if (probe.isEmpty()) return null
 
             val id3RequiredBytes = Id3Reader.peekId3RequiredBytes(probe)
+            val mp4RequiredBytes = if (id3RequiredBytes == null) Id3Reader.peekMp4RequiredBytes(probe) else null
             val prefix = when {
                 id3RequiredBytes != null && id3RequiredBytes > probe.size ->
                     apiClient.fetchPrefix(downloadUrl, maxBytes = id3RequiredBytes.coerceAtMost(MAX_ID3_FETCH_BYTES))
-                id3RequiredBytes == null && probe.size.toLong() < FLAC_OR_MP4_PREFIX_BYTES ->
-                    apiClient.fetchPrefix(downloadUrl, maxBytes = FLAC_OR_MP4_PREFIX_BYTES)
+                mp4RequiredBytes != null && mp4RequiredBytes > probe.size ->
+                    apiClient.fetchPrefix(downloadUrl, maxBytes = mp4RequiredBytes.coerceAtMost(MAX_MP4_FETCH_BYTES))
+                id3RequiredBytes == null && mp4RequiredBytes == null && probe.size.toLong() < FLAC_PREFIX_BYTES ->
+                    apiClient.fetchPrefix(downloadUrl, maxBytes = FLAC_PREFIX_BYTES)
                 else -> probe
             }
             if (prefix.isEmpty()) return null

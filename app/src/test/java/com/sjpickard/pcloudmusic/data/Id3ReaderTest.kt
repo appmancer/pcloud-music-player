@@ -144,6 +144,39 @@ class Id3ReaderTest {
         assertJpeg(tagsFixed.coverArt!!)
     }
 
+    @Test
+    fun `peekMp4RequiredBytes finds moov's exact extent, skipping over mdat`() {
+        // test.m4a's layout (confirmed by direct inspection): ftyp, free,
+        // mdat (audio - comes BEFORE moov in this fixture, unlike the real
+        // "Opera on 3" case this was built for, where moov comes first but
+        // is itself huge - either way, peekMp4RequiredBytes must walk past
+        // whatever precedes moov using only box headers to find it.
+        val bytes = File(resourcePath("test.m4a")).readBytes()
+        val required = Id3Reader.peekMp4RequiredBytes(bytes)
+        assertEquals(bytes.size.toLong(), required) // moov runs to the end of this fixture
+    }
+
+    @Test
+    fun `peekMp4RequiredBytes returns null for a non-MP4 prefix`() {
+        assertNull(Id3Reader.peekMp4RequiredBytes("not an mp4 file at all".toByteArray()))
+    }
+
+    @Test
+    fun `an MP4 cover is missed by a prefix that cuts off mid-moov, but not by one sized via peekMp4RequiredBytes`() {
+        val bytes = File(resourcePath("test.m4a")).readBytes()
+
+        val tooSmall = bytes.copyOfRange(0, 500) // moov starts at 331 in this fixture - this cuts it off partway through
+        val tagsTruncated = Id3Reader.readFromPrefix(tooSmall, totalFileSize = bytes.size.toLong(), includeCoverArt = true)
+        assertTrue(tagsTruncated == null || tagsTruncated.coverArt == null)
+
+        val required = Id3Reader.peekMp4RequiredBytes(bytes.copyOfRange(0, 4_096.coerceAtMost(bytes.size)))!!
+        val rightSized = bytes.copyOfRange(0, required.toInt())
+        val tagsFixed = Id3Reader.readFromPrefix(rightSized, totalFileSize = bytes.size.toLong(), includeCoverArt = true)
+        assertNotNull(tagsFixed)
+        assertNotNull("fix: cover found once fetched to peekMp4RequiredBytes' exact size", tagsFixed!!.coverArt)
+        assertJpeg(tagsFixed.coverArt!!)
+    }
+
     private fun assertPng(bytes: ByteArray) {
         assertTrue(bytes.size > 4)
         assertEquals(0x89.toByte(), bytes[0])
