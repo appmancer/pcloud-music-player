@@ -35,6 +35,20 @@
             </intent-filter>
         </service>
 
+        <!-- Home-screen "now playing" widget (see widget/PlayerWidget.kt) -
+             prev/play-pause/next, forwarding to the same PlayerController
+             the in-app player tray drives. -->
+        <receiver
+            android:name=".widget.PlayerWidgetReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/player_widget_info" />
+        </receiver>
+
         <!-- Receives pCloud's OAuth redirect once sign-in completes (token
              flow - see PCloudAuthManager). Scheme/host must match
              pcloud.redirectUri in local.properties and the app's

@@ -85,6 +85,11 @@ dependencies {
     // Cover art loading/decoding/caching in Compose
     implementation("io.coil-kt:coil-compose:2.6.0")
 
+    // Home screen widget (now-playing + prev/play-pause/next) - Compose-style
+    // DSL rather than classic RemoteViews/View-XML, to match the rest of
+    // this app's all-Compose UI.
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+
     // pCloud OAuth (plain browser token-flow, no SDK dependency - see
     // PCloudAuthManager) and REST API access (PCloudApiClient).
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
