@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -76,77 +77,92 @@ fun ArtistListScreen(
         }
     }
 
-    Column {
-        Row(
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, end = 8.dp),
-        ) {
-            IconButton(onClick = onSearchSelected) {
-                Icon(imageVector = Icons.Filled.Search, contentDescription = "Search artists and albums")
-            }
-            IconButton(onClick = onAlbumsSelected) {
-                Icon(imageVector = Icons.Filled.Album, contentDescription = "Browse all albums")
-            }
-            IconButton(onClick = onDownloadsSelected) {
-                Icon(imageVector = Icons.Filled.DownloadForOffline, contentDescription = "Downloads")
-            }
-            IconButton(onClick = onAccountSelected) {
-                Icon(imageVector = Icons.Filled.AccountCircle, contentDescription = "pCloud account")
+    // One LazyVerticalGrid for the whole screen, with the top bar and
+    // "Continue listening" row as full-width spanning items rather than
+    // living in a separate, non-scrolling outer Column - same fix as
+    // AlbumGridScreen's title-clipping bug (see its doc comment). There, a
+    // fixed height estimate broke; here the whole "Continue listening"
+    // section (plus the top icon row) stayed permanently pinned above the
+    // artist grid's own internal scroll, eating vertical space that only
+    // got tighter once the player tray started docking at the bottom -
+    // this way everything scrolls away together, same as any other list.
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = TILE_WIDTH),
+        contentPadding = PaddingValues(12.dp),
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                IconButton(onClick = onSearchSelected) {
+                    Icon(imageVector = Icons.Filled.Search, contentDescription = "Search artists and albums")
+                }
+                IconButton(onClick = onAlbumsSelected) {
+                    Icon(imageVector = Icons.Filled.Album, contentDescription = "Browse all albums")
+                }
+                IconButton(onClick = onDownloadsSelected) {
+                    Icon(imageVector = Icons.Filled.DownloadForOffline, contentDescription = "Downloads")
+                }
+                IconButton(onClick = onAccountSelected) {
+                    Icon(imageVector = Icons.Filled.AccountCircle, contentDescription = "pCloud account")
+                }
             }
         }
 
         if (continueListening.isNotEmpty()) {
-            Text(
-                text = "Continue listening",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-            )
-            LazyRow(
-                state = continueListeningListState,
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(continueListening, key = { it.trackId }) { entry: ContinueListeningItem ->
-                    ContinueListeningTile(
-                        entry = entry,
-                        onClick = {
-                            scope.launch {
-                                if (entry.albumId != null) {
-                                    val (album, tracks) = viewModel.albumAndTracks(entry.albumId) ?: return@launch
-                                    val startIndex = tracks.indexOfFirst { it.id == entry.trackId }
-                                    if (startIndex < 0) return@launch
-                                    playerController.play(album, tracks, startIndex)
-                                } else {
-                                    onArtistSelected(entry.artistId)
-                                }
-                            }
-                        },
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    Text(
+                        text = "Continue listening",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
                     )
+                    LazyRow(
+                        state = continueListeningListState,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(continueListening, key = { it.trackId }) { entry: ContinueListeningItem ->
+                            ContinueListeningTile(
+                                entry = entry,
+                                onClick = {
+                                    scope.launch {
+                                        if (entry.albumId != null) {
+                                            val (album, tracks) = viewModel.albumAndTracks(entry.albumId) ?: return@launch
+                                            val startIndex = tracks.indexOfFirst { it.id == entry.trackId }
+                                            if (startIndex < 0) return@launch
+                                            playerController.play(album, tracks, startIndex)
+                                        } else {
+                                            onArtistSelected(entry.artistId)
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        Text(
-            text = "Artists",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-        )
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = TILE_WIDTH),
-            contentPadding = PaddingValues(12.dp),
-        ) {
-            items(artists, key = { it.id }) { artist: ArtistEntity ->
-                Column(modifier = Modifier.padding(8.dp).clickable { onArtistSelected(artist.id) }) {
-                    CoverThumbnail(artist.coverPath, size = TILE_WIDTH)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = artist.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Text(
+                text = "Artists",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
+            )
+        }
+
+        items(artists, key = { it.id }) { artist: ArtistEntity ->
+            Column(modifier = Modifier.padding(8.dp).clickable { onArtistSelected(artist.id) }) {
+                CoverThumbnail(artist.coverPath, size = TILE_WIDTH)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = artist.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
