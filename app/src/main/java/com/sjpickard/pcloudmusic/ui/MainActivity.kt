@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetScaffoldState
+import androidx.compose.material3.rememberStandardBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -83,7 +84,15 @@ class MainActivity : ComponentActivity() {
                 Surface {
                     val viewModel: LibraryViewModel = viewModel(factory = factory)
                     val navController = rememberNavController()
-                    val sheetState = rememberBottomSheetScaffoldState()
+                    // confirmValueChange blocks the sheet reaching Hidden - there's no
+                    // close button, so a swipe-to-dismiss gesture would leave the mini
+                    // player gone but its content padding (below) still reserved, since
+                    // that's driven by nowPlaying rather than the sheet's own state.
+                    val sheetState = rememberBottomSheetScaffoldState(
+                        bottomSheetState = rememberStandardBottomSheetState(
+                            confirmValueChange = { it != SheetValue.Hidden },
+                        ),
+                    )
                     val coroutineScope = rememberCoroutineScope()
                     val nowPlaying by app.playerController.nowPlaying.collectAsState()
                     val navigationBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
