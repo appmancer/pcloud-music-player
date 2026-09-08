@@ -32,6 +32,32 @@ data class DownloadedTrackItem(
     val albumTitle: String?,
 )
 
+// Sort keys that ignore a leading "The "/"A "/"An " so e.g. "The Beatles"
+// files under B, not T - matches how the same article is invisible for
+// physical-shelf alphabetizing. Applied at query time (SQLite LIKE is
+// ASCII case-insensitive by default) rather than stored, so it stays in
+// sync with the raw name/title with no extra column or migration.
+private const val ARTIST_SORT_KEY = "(CASE " +
+    "WHEN name LIKE 'The %' THEN substr(name, 5) " +
+    "WHEN name LIKE 'An %' THEN substr(name, 4) " +
+    "WHEN name LIKE 'A %' THEN substr(name, 3) " +
+    "ELSE name END)"
+private const val ARTIST_SORT_KEY_QUALIFIED = "(CASE " +
+    "WHEN ar.name LIKE 'The %' THEN substr(ar.name, 5) " +
+    "WHEN ar.name LIKE 'An %' THEN substr(ar.name, 4) " +
+    "WHEN ar.name LIKE 'A %' THEN substr(ar.name, 3) " +
+    "ELSE ar.name END)"
+private const val ALBUM_SORT_KEY = "(CASE " +
+    "WHEN title LIKE 'The %' THEN substr(title, 5) " +
+    "WHEN title LIKE 'An %' THEN substr(title, 4) " +
+    "WHEN title LIKE 'A %' THEN substr(title, 3) " +
+    "ELSE title END)"
+private const val ALBUM_SORT_KEY_QUALIFIED = "(CASE " +
+    "WHEN al.title LIKE 'The %' THEN substr(al.title, 5) " +
+    "WHEN al.title LIKE 'An %' THEN substr(al.title, 4) " +
+    "WHEN al.title LIKE 'A %' THEN substr(al.title, 3) " +
+    "ELSE al.title END)"
+
 @Dao
 interface MusicDao {
 
@@ -40,7 +66,7 @@ interface MusicDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertArtist(artist: ArtistEntity): Long
 
-    @Query("SELECT * FROM artists ORDER BY name COLLATE NOCASE ASC")
+    @Query("SELECT * FROM artists ORDER BY $ARTIST_SORT_KEY COLLATE NOCASE ASC")
     fun observeArtists(): Flow<List<ArtistEntity>>
 
     @Query("SELECT * FROM artists WHERE id = :artistId")
@@ -88,13 +114,13 @@ interface MusicDao {
     @Query("SELECT * FROM albums WHERE id = :albumId")
     fun observeAlbum(albumId: Long): Flow<AlbumEntity?>
 
-    @Query("SELECT * FROM albums WHERE artistId = :artistId ORDER BY title COLLATE NOCASE ASC")
+    @Query("SELECT * FROM albums WHERE artistId = :artistId ORDER BY $ALBUM_SORT_KEY COLLATE NOCASE ASC")
     fun observeAlbums(artistId: Long): Flow<List<AlbumEntity>>
 
     /** Every album in the library, artist-agnostic - backs the flat "browse
      * all albums" screen (as opposed to observeAlbums, which is scoped to
      * one artist). */
-    @Query("SELECT * FROM albums ORDER BY title COLLATE NOCASE ASC")
+    @Query("SELECT * FROM albums ORDER BY $ALBUM_SORT_KEY COLLATE NOCASE ASC")
     fun observeAllAlbums(): Flow<List<AlbumEntity>>
 
     /** Album identity is (artistId, folder path) - matches the "one folder =
@@ -222,7 +248,7 @@ interface MusicDao {
             "JOIN artists ar ON ar.id = t.artistId " +
             "LEFT JOIN albums al ON al.id = t.albumId " +
             "WHERE t.localPath IS NOT NULL " +
-            "ORDER BY ar.name COLLATE NOCASE ASC, al.title COLLATE NOCASE ASC, t.discNumber ASC, t.trackNumber ASC"
+            "ORDER BY $ARTIST_SORT_KEY_QUALIFIED COLLATE NOCASE ASC, $ALBUM_SORT_KEY_QUALIFIED COLLATE NOCASE ASC, t.discNumber ASC, t.trackNumber ASC"
     )
     fun observeDownloadedTracks(): Flow<List<DownloadedTrackItem>>
 
@@ -231,12 +257,12 @@ interface MusicDao {
 
     /** Simple cross-library search by title (album/track) or artist name -
      * backs SearchScreen. */
-    @Query("SELECT * FROM artists WHERE name LIKE '%' || :query || '%' COLLATE NOCASE ORDER BY name ASC")
+    @Query("SELECT * FROM artists WHERE name LIKE '%' || :query || '%' COLLATE NOCASE ORDER BY $ARTIST_SORT_KEY COLLATE NOCASE ASC")
     fun searchArtists(query: String): Flow<List<ArtistEntity>>
 
     @Query(
         "SELECT * FROM albums WHERE title LIKE '%' || :query || '%' COLLATE NOCASE " +
-            "OR displayArtist LIKE '%' || :query || '%' COLLATE NOCASE ORDER BY title ASC"
+            "OR displayArtist LIKE '%' || :query || '%' COLLATE NOCASE ORDER BY $ALBUM_SORT_KEY COLLATE NOCASE ASC"
     )
     fun searchAlbums(query: String): Flow<List<AlbumEntity>>
 }
